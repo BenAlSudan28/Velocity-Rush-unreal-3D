@@ -1,1 +1,93 @@
+name: Build Unreal Android APK
 
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'VelocityRush.uproject'
+      - 'Config/**'
+      - 'Content/**'
+      - 'Source/**'
+      - 'Resources/**'
+      - 'Tools/**'
+      - '.github/workflows/build-unreal-android.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  android-apk:
+    name: Build Android APK (UE 5.5)
+    runs-on: [self-hosted, windows, unreal-android]
+    timeout-minutes: 180
+    env:
+      UE_ROOT: ${{ vars.UE_ROOT }}
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Validate Unreal and Android toolchains
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ([string]::IsNullOrWhiteSpace($env:UE_ROOT)) {
+            throw 'Set the repository Actions variable UE_ROOT to a licensed Unreal Engine 5.5 installation.'
+          }
+          $uat = Join-Path $env:UE_ROOT 'Engine/Build/BatchFiles/RunUAT.bat'
+          $build = Join-Path $env:UE_ROOT 'Engine/Build/BatchFiles/Build.bat'
+          if (-not (Test-Path $uat)) { throw "RunUAT.bat not found under UE_ROOT: $uat" }
+          if (-not (Test-Path $build)) { throw "Build.bat not found under UE_ROOT: $build" }
+          if (-not $env:ANDROID_HOME -and -not $env:ANDROID_SDK_ROOT) {
+            Write-Warning 'ANDROID_HOME/ANDROID_SDK_ROOT is not set; Unreal Turnkey must still report a valid configured SDK.'
+          }
+          & $uat Turnkey -command=VerifySdk -platform=Android -utf8output
+          if ($LASTEXITCODE -ne 0) { throw "Unreal Turnkey Android SDK verification failed with exit code $LASTEXITCODE" }
+
+      - name: Build editor target
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = Join-Path $env:GITHUB_WORKSPACE 'VelocityRush.uproject'
+          $build = Join-Path $env:UE_ROOT 'Engine/Build/BatchFiles/Build.bat'
+          & $build VelocityRushEditor Win64 Development $project -WaitMutex -NoHotReloadFromIDE
+          if ($LASTEXITCODE -ne 0) { throw "Unreal C++ editor build failed with exit code $LASTEXITCODE" }
+
+      - name: Cook, package and archive Android
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = Join-Path $env:GITHUB_WORKSPACE 'VelocityRush.uproject'
+          $uat = Join-Path $env:UE_ROOT 'Engine/Build/BatchFiles/RunUAT.bat'
+          $archive = Join-Path $env:GITHUB_WORKSPACE 'Build/Android'
+          New-Item -ItemType Directory -Force -Path $archive | Out-Null
+          $UATArgs = @(
+            'BuildCookRun', "-project=$project", '-noP4', '-platform=Android',
+            '-cookflavor=ETC2', '-clientconfig=Development', '-build', '-cook',
+            '-stage', '-pak', '-package', '-archive', "-archivedirectory=$archive", '-utf8output'
+          )
+          & $uat @UATArgs
+          if ($LASTEXITCODE -ne 0) { throw "Unreal Android package failed with exit code $LASTEXITCODE" }
+          $apk = Get-ChildItem -Path $archive -Filter '*.apk' -File -Recurse | Select-Object -First 1
+          if (-not $apk) { throw "UAT returned success but no APK was created under $archive" }
+          Copy-Item $apk.FullName (Join-Path $env:GITHUB_WORKSPACE 'VelocityRush-Android.apk') -Force
+          Write-Host "Verified APK: $($apk.FullName) ($($apk.Length) bytes)"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: VelocityRush-Android-APK
+          path: VelocityRush-Android.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload Unreal logs on failure or success
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Unreal-Android-build-logs
+          path: |
+            Saved/Logs/**
+            Build/Android/**/Build/Manifest*.xml
+          if-no-files-found: ignore
+          retention-days: 7
