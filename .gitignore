@@ -1,0 +1,27 @@
+# Unreal-generated files
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+.idea/
+*.sln
+*.suo
+*.opensdf
+*.sdf
+*.VC.db
+*.VC.VC.opendb
+
+# Packaged builds and local Android signing material
+Build/
+*.apk
+*.aab
+*.keystore
+*.jks
+key.properties
+
+# OS/editor debris
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
